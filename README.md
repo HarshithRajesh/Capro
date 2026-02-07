@@ -169,3 +169,6 @@ This ensures:
 Backend Developer | Go | Systems & Infrastructure Enthusiast
 
 ---
+
+Project was inspired from Roadmap.sh backend projects
+<https://roadmap.sh/projects/caching-server>
