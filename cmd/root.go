@@ -29,10 +29,24 @@ var (
 
 const cacheFile = "cache.json"
 
+func loadCache() {
+	file, err := os.ReadFile(cacheFile)
+	if err == nil {
+		json.Unmarshal(file, &cache)
+	}
+}
+
+func updateCache(path string, entry Cache) {
+	cache[path] = entry
+	data, _ := json.MarshalIndent(cache, "", "  ")
+	os.WriteFile(cacheFile, data, 0o644)
+}
+
 func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 
-	if entry, found := cache[path]; found {
+	newPath := strings.TrimSuffix(origin, "/") + path
+	if entry, found := cache[newPath]; found {
 		fmt.Printf("Cache-Hit :%s\n", path)
 		w.Header().Set("X-Cache", "HIT")
 		for k, v := range entry.Header {
@@ -41,34 +55,33 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(entry.Status)
 
 		if _, err = w.Write(entry.Body); err != nil {
-			log.Fatal(err)
-			os.Exit(1)
+			http.Error(w, "Message", http.StatusBadGateway)
+			return
 		}
 		return
 	}
 
 	fmt.Printf("Cache-MISS :%s\n", path)
-	newPath := strings.TrimSuffix(origin, "/") + path
-	req, err := http.Get(newPath)
+	resp, err := http.Get(newPath)
 	if err != nil {
-		log.Fatal(err)
+		http.Error(w, "Message", http.StatusBadGateway)
 	}
-	defer req.Body.Close()
+	defer resp.Body.Close()
 
-	body, err := io.ReadAll(req.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Fatal(err)
+		http.Error(w, "Message", http.StatusBadGateway)
 	}
-	respCode := req.StatusCode
+	respCode := resp.StatusCode
 	if respCode != 200 {
 		log.Fatal("invalid url")
-		os.Exit(1)
+		return
 	}
 
-	originalHeaders := req.Header
+	originalHeaders := resp.Header
 	headerMap := make(map[string]string)
 	for k := range originalHeaders {
-		headerMap[k] = req.Header.Get(k)
+		headerMap[k] = resp.Header.Get(k)
 	}
 	bodyString := string(body)
 
@@ -78,34 +91,12 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 		Header: headerMap,
 	}
 
-	updateCache(path, entry)
+	updateCache(newPath, entry)
 
 	w.Header().Set("X-Cache", "MISS")
-	w.Header().Set("Content-type", entry.Header["Content-type"])
+	w.Header().Set("Content-Type", entry.Header["Content-Type"])
 	w.WriteHeader(entry.Status)
 	w.Write([]byte(bodyString))
-}
-
-func getCache() {
-	file, err := os.ReadFile(cacheFile)
-	if err != nil {
-		fmt.Println("The cache file doesnt exist")
-		return
-	}
-
-	err = json.Unmarshal(file, &cache)
-	if err != nil {
-		fmt.Print(err)
-	}
-}
-
-func updateCache(key string, entry Cache) {
-	cache[key] = entry
-	data, _ := json.MarshalIndent(cache, "", " ")
-	err := os.WriteFile(cacheFile, data, 0o644)
-	if err != nil {
-		fmt.Println("Failed to Write to the cacheFile")
-	}
 }
 
 var rootCmd = &cobra.Command{
@@ -118,7 +109,7 @@ var rootCmd = &cobra.Command{
 			err := os.WriteFile("cache.json", emptyData, 0o644)
 			if err != nil {
 				fmt.Println("Error Clearing Cache")
-				os.Exit(1)
+				return
 			}
 
 			fmt.Println("Clearing Cache")
@@ -135,13 +126,13 @@ var rootCmd = &cobra.Command{
 			fmt.Print("No origin was specified")
 		}
 		if origin == "" {
-			fmt.Println("origin is required")
+			fmt.Println("origin is respuired")
 			return
 		}
-		getCache()
+		loadCache()
 		http.HandleFunc("/", proxyHandler)
 		fmt.Printf("Starting Proxy Server on port %d\n", port)
-		fmt.Printf("Forwarding requests to: %s\n", origin)
+		fmt.Printf("Forwarding respuests to: %s\n", origin)
 		portadr := fmt.Sprintf(":%d", port)
 		err = http.ListenAndServe(portadr, nil)
 		if err != nil {
@@ -160,6 +151,9 @@ func init() {
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error while executing Capro '%s'\n", err)
-		os.Exit(1)
+		return
 	}
 }
+
+//Add Mutex for the concurrent respuests
+//
